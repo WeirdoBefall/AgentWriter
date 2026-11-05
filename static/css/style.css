@@ -51,6 +51,9 @@ body {
 
     font-family:
         "DM Sans",
+        "PingFang SC",
+        "Microsoft YaHei",
+        "Noto Sans CJK SC",
         sans-serif;
 
     overflow-x: hidden;
@@ -169,7 +172,7 @@ button {
 
 
 .brand strong {
-    font-family: "Manrope", sans-serif;
+    font-family: "Manrope", "PingFang SC", "Microsoft YaHei", sans-serif;
     font-size: 16px;
 }
 
@@ -326,7 +329,7 @@ button {
 .topbar h1 {
     margin: 6px 0 0;
 
-    font-family: "Manrope", sans-serif;
+    font-family: "Manrope", "PingFang SC", "Microsoft YaHei", sans-serif;
     font-size: clamp(25px, 3vw, 39px);
     line-height: 1.12;
 }
@@ -398,7 +401,7 @@ button {
 
 .composer-heading h2 {
     margin: 0;
-    font-family: "Manrope", sans-serif;
+    font-family: "Manrope", "PingFang SC", "Microsoft YaHei", sans-serif;
     font-size: 20px;
 }
 
@@ -580,7 +583,7 @@ textarea::placeholder {
 .panel-header h2 {
     margin: 4px 0 0;
 
-    font-family: "Manrope", sans-serif;
+    font-family: "Manrope", "PingFang SC", "Microsoft YaHei", sans-serif;
     font-size: 18px;
 }
 
@@ -935,7 +938,8 @@ textarea::placeholder {
     margin: 0 auto;
 
     color: #dfe9e4;
-    line-height: 1.75;
+    line-height: 1.9;
+    overflow-wrap: anywhere;
 }
 
 
@@ -943,7 +947,7 @@ textarea::placeholder {
 .article-preview h2,
 .article-preview h3 {
     color: #ffffff;
-    font-family: "Manrope", sans-serif;
+    font-family: "Manrope", "PingFang SC", "Microsoft YaHei", sans-serif;
     line-height: 1.25;
 }
 

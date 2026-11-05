@@ -15,15 +15,10 @@ from langgraph.types import Send
 from langchain_core.messages import SystemMessage, HumanMessage
 from langchain_community.tools.tavily_search import TavilySearchResults
 
-from langchain_groq import ChatGroq
-from langchain_ollama import ChatOllama
+from cloudflare_models import BASE_DIR, create_chat_model, structured_output, generate_image_bytes
 import psycopg
 from psycopg.rows import dict_row
 from langgraph.checkpoint.postgres import PostgresSaver
-from dotenv import load_dotenv
-import os 
-
-load_dotenv()
 
 
 
@@ -32,7 +27,7 @@ def get_database_url():
 
     if not database_url:
         raise ValueError(
-            "DATABASE_URL is missing. Please add your Render PostgreSQL External Database URL to .env"
+            "缺少 DATABASE_URL，请在 .env 中配置 PostgreSQL 数据库连接地址。"
         )
 
     if "sslmode=" not in database_url:
@@ -53,15 +48,15 @@ class Task(BaseModel):
 
     goal: str = Field(
         ...,
-        description="One sentence describing what the reader should be able to do/understand after this section.",
+        description="用一句中文说明读者学完本节后能理解或完成什么。",
     )
     bullets: List[str] = Field(
         ...,
         min_length=3,
         max_length=6,
-        description="3–6 concrete, non-overlapping subpoints to cover in this section.",
+        description="本节需涵盖的 3～6 个具体、不重复的中文要点。",
     )
-    target_words: int = Field(..., description="Target word count for this section (120–550).")
+    target_words: int = Field(..., description="本节目标字数，120～550 个中文字符，不含代码。")
 
     tags: List[str] = Field(default_factory=list)
     requires_research: bool = False
@@ -75,7 +70,7 @@ class Plan(BaseModel):
     tone: str
     blog_kind: Literal["explainer", "tutorial", "news_roundup", "comparison", "system_design"] = "explainer"
     constraints: List[str] = Field(default_factory=list)
-    tasks: List[Task]
+    tasks: List[Task] = Field(..., min_length=5, max_length=9)
 
 
 class EvidenceItem(BaseModel):
@@ -97,13 +92,11 @@ class EvidencePack(BaseModel):
 
 
 class ImageSpec(BaseModel):
-    placeholder: str = Field(..., description="e.g. [[IMAGE_1]]")
-    filename: str = Field(..., description="Save under images/, e.g. qkv_flow.png")
+    placeholder: str = Field(..., description="配图占位符，例如 [[IMAGE_1]]")
+    filename: str = Field(..., description="只填写英文 JPEG 文件名，例如 qkv_flow.jpg")
     alt: str
     caption: str
-    prompt: str = Field(..., description="Prompt to send to the image model.")
-    size: Literal["1024x1024", "1024x1536", "1536x1024"] = "1024x1024"
-    quality: Literal["low", "medium", "high"] = "medium"
+    prompt: str = Field(..., description="发给配图模型的英文画面描述，最多 2048 字符。")
 
 
 class GlobalImagePlan(BaseModel):
@@ -136,44 +129,30 @@ class State(TypedDict):
 
 
 
-llm = ChatOllama(
-    model="llama3.1:8b",
-    base_url="http://localhost:11434",
-    temperature=0,
-    num_ctx=32768,
-)
+llm = create_chat_model()
 
 
 
 # -----------------------------
 # 3) Router (decide upfront)
 # -----------------------------
-ROUTER_SYSTEM = """You are a routing module for a technical blog planner.
-
-Decide whether web research is needed BEFORE planning.
-
-Modes:
-- closed_book (needs_research=false):
-  Evergreen topics where correctness does not depend on recent facts (concepts, fundamentals).
-- hybrid (needs_research=true):
-  Mostly evergreen but needs up-to-date examples/tools/models to be useful.
-- open_book (needs_research=true):
-  Mostly volatile: weekly roundups, "this week", "latest", rankings, pricing, policy/regulation.
-
-If needs_research=true:
-- Output 3–10 high-signal queries.
-- Queries should be scoped and specific (avoid generic queries like just "AI" or "LLM").
-- If user asked for "last week/this week/latest", reflect that constraint IN THE QUERIES.
-"""
+ROUTER_SYSTEM = """你是中文技术博客的需求分析模块。在规划文章前，判断是否需要联网检索。
+模式：
+- closed_book：基础知识、原理等不依赖最新事实的主题，needs_research=false。
+- hybrid：基础知识为主，但需要最新工具、模型或示例，needs_research=true。
+- open_book：近期资讯、排名、价格、政策等时效性主题，needs_research=true。
+需要检索时，生成 3～10 条具体且高价值的查询。优先中文查询；寻找官方文档时可以使用英文。
+用户提到“本周”“上周”“最新”等时间要求时，应反映在查询中。
+保留 Schema 的英文字段名及枚举值。"""
 
 def router_node(state: State) -> dict:
     
     topic = state["topic"]
-    decider = llm.with_structured_output(RouterDecision)
+    decider = structured_output(llm, RouterDecision)
     decision = decider.invoke(
         [
             SystemMessage(content=ROUTER_SYSTEM),
-            HumanMessage(content=f"Topic: {topic}"),
+            HumanMessage(content=f"主题：{topic}"),
         ]
     )
 
@@ -212,18 +191,11 @@ def _tavily_search(query: str, max_results: int = 5) -> List[dict]:
     return normalized
 
 
-RESEARCH_SYSTEM = """You are a research synthesizer for technical writing.
-
-Given raw web search results, produce a deduplicated list of EvidenceItem objects.
-
-Rules:
-- Only include items with a non-empty url.
-- Prefer relevant + authoritative sources (company blogs, docs, reputable outlets).
-- If a published date is explicitly present in the result payload, keep it as YYYY-MM-DD.
-  If missing or unclear, set published_at=null. Do NOT guess.
-- Keep snippets short.
-- Deduplicate by URL.
-"""
+RESEARCH_SYSTEM = """你是中文技术文章的资料整理员。根据原始检索结果，生成去重的 EvidenceItem 列表。
+只收录 URL 非空的条目，优先选择相关的官方文档、公司博客和可靠媒体。
+title 和 snippet 使用简体中文；必要的产品名、论文名可保留原文，摘要简洁准确。
+只有结果明确提供发布日期时，才保留 YYYY-MM-DD 格式的 published_at；否则设为 null，不要猜测。
+按 URL 去重，保持 URL 和来源信息准确，不得编造事实。"""
 
 def research_node(state: State) -> dict:
 
@@ -239,11 +211,11 @@ def research_node(state: State) -> dict:
     if not raw_results:
         return {"evidence": []}
 
-    extractor = llm.with_structured_output(EvidencePack)
+    extractor = structured_output(llm, EvidencePack)
     pack = extractor.invoke(
         [
             SystemMessage(content=RESEARCH_SYSTEM),
-            HumanMessage(content=f"Raw results:\n{raw_results}"),
+            HumanMessage(content=f"原始检索资料：\n{raw_results}"),
         ]
     )
 
@@ -262,43 +234,23 @@ def research_node(state: State) -> dict:
 # -----------------------------
 # 5) Orchestrator (Plan)
 # -----------------------------
-ORCH_SYSTEM = """You are a senior technical writer and developer advocate.
-Your job is to produce a highly actionable outline for a technical blog post.
-
-Hard requirements:
-- Create 5–9 sections (tasks) suitable for the topic and audience.
-- Each task must include:
-  1) goal (1 sentence)
-  2) 3–6 bullets that are concrete, specific, and non-overlapping
-  3) target word count (120–550)
-
-Quality bar:
-- Assume the reader is a developer; use correct terminology.
-- Bullets must be actionable: build/compare/measure/verify/debug.
-- Ensure the overall plan includes at least 2 of these somewhere:
-  * minimal code sketch / MWE (set requires_code=True for that section)
-  * edge cases / failure modes
-  * performance/cost considerations
-  * security/privacy considerations (if relevant)
-  * debugging/observability tips
-
-Grounding rules:
-- Mode closed_book: keep it evergreen; do not depend on evidence.
-- Mode hybrid:
-  - Use evidence for up-to-date examples (models/tools/releases) in bullets.
-  - Mark sections using fresh info as requires_research=True and requires_citations=True.
-- Mode open_book:
-  - Set blog_kind = "news_roundup".
-  - Every section is about summarizing events + implications.
-  - DO NOT include tutorial/how-to sections unless user explicitly asked for that.
-  - If evidence is empty or insufficient, create a plan that transparently says "insufficient sources"
-    and includes only what can be supported.
-
-Output must strictly match the Plan schema.
-"""
+ORCH_SYSTEM = """你是资深中文技术作者，为开发者制定可以直接执行的博客大纲。
+文章标题、目标读者、语气、约束、章节标题、目标、要点和标签都必须使用简体中文。
+即使主题以英文输入，也必须规划为中文文章；产品名、代码标识符和必要术语可保留原文。
+硬性要求：
+- 创建 5～9 个适合主题和读者的章节。
+- 每章包含一句话目标、3～6 个具体且不重复的要点、120～550 字的目标字数（按中文字符计，不含代码）。
+- 要点应可落实为实现、对比、测量、验证或排错。
+- 全文至少覆盖以下两项：最小可运行代码、边界与故障、性能或成本、安全或隐私、调试与可观测性。
+资料使用规则：
+- closed_book：围绕稳定知识展开，不依赖近期信息。
+- hybrid：用给定资料支撑最新示例，相应章节设置 requires_research=true 和 requires_citations=true。
+- open_book：blog_kind 必须为 news_roundup，聚焦事件及影响；除非用户明确要求，不改写成教程。
+- 资料不足时明确写“参考资料不足”，只安排有依据的内容。
+严格遵循 Plan Schema；保留英文字段名和 blog_kind 等枚举值，其余面向读者的文字用简体中文。"""
 
 def orchestrator_node(state: State) -> dict:
-    planner = llm.with_structured_output(Plan)
+    planner = structured_output(llm, Plan)
 
     evidence = state.get("evidence", [])
     mode = state.get("mode", "closed_book")
@@ -308,9 +260,9 @@ def orchestrator_node(state: State) -> dict:
             SystemMessage(content=ORCH_SYSTEM),
             HumanMessage(
                 content=(
-                    f"Topic: {state['topic']}\n"
-                    f"Mode: {mode}\n\n"
-                    f"Evidence (ONLY use for fresh claims; may be empty):\n"
+                    f"主题：{state['topic']}\n"
+                    f"写作模式：{mode}\n\n"
+                    f"参考资料（近期事实只能依据这些资料，可能为空）：\n"
                     f"{[e.model_dump() for e in evidence][:16]}"
                 )
             ),
@@ -345,36 +297,21 @@ def fanout(state: State):
 # -----------------------------
 # 7) Worker (write one section)
 # -----------------------------
-WORKER_SYSTEM = """You are a senior technical writer and developer advocate.
-Write ONE section of a technical blog post in Markdown.
-
-Hard constraints:
-- Follow the provided Goal and cover ALL Bullets in order (do not skip or merge bullets).
-- Stay close to Target words (±15%).
-- Output ONLY the section content in Markdown (no blog title H1, no extra commentary).
-- Start with a '## <Section Title>' heading.
-
-Scope guard:
-- If blog_kind == "news_roundup": do NOT turn this into a tutorial/how-to guide.
-  Do NOT teach web scraping, RSS, automation, or "how to fetch news" unless bullets explicitly ask for it.
-  Focus on summarizing events and implications.
-
-Grounding policy:
-- If mode == open_book:
-  - Do NOT introduce any specific event/company/model/funding/policy claim unless it is supported by provided Evidence URLs.
-  - For each event claim, attach a source as a Markdown link: ([Source](URL)).
-  - Only use URLs provided in Evidence. If not supported, write: "Not found in provided sources."
-- If requires_citations == true:
-  - For outside-world claims, cite Evidence URLs the same way.
-- Evergreen reasoning is OK without citations unless requires_citations is true.
-
-Code:
-- If requires_code == true, include at least one minimal, correct code snippet relevant to the bullets.
-
-Style:
-- Short paragraphs, bullets where helpful, code fences for code.
-- Avoid fluff/marketing. Be precise and implementation-oriented.
-"""
+WORKER_SYSTEM = """你是资深中文技术作者。只输出一个章节的 Markdown 内容。
+语言与格式：
+- 标题、正文、列表、表格、说明、代码注释和引用标签必须使用简体中文，即使输入主题是英文。
+- 产品名、API 名、代码标识符、URL 和必要的英文术语保留原样，首次出现的术语可附中文解释。
+- 严格依照目标，依次覆盖全部要点，不跳过也不随意合并。
+- 字数按中文字符计（不含代码），接近目标字数，允许上下浮动 15%。
+- 以“## 章节标题”开头，不输出文章一级标题、前言式对话或额外说明。
+范围与事实：
+- blog_kind 为 news_roundup 时，聚焦事件与影响；没有明确要求时，不扩展成爬虫、RSS 或自动化教程。
+- mode 为 open_book 时，具体事件、公司、模型、融资、政策等事实必须有给定资料支持。
+- 需要引用时，紧随事实附上 Markdown 链接：[来源](URL)。只允许使用给定资料中的 URL。
+- 没有依据时写“未在所提供的资料中找到相关信息。”，不要编造。
+- requires_citations=true 时，外部事实均需引用。稳定的原理推导可按要求自行阐述。
+requires_code=true 时，必须包含与要点相关的最小正确代码示例，代码注释与解释使用中文。
+使用短段落，适量列表和代码块，表达准确、自然，避免营销话术。"""
 
 def worker_node(payload: dict) -> dict:
     
@@ -389,7 +326,7 @@ def worker_node(payload: dict) -> dict:
     evidence_text = ""
     if evidence:
         evidence_text = "\n".join(
-            f"- {e.title} | {e.url} | {e.published_at or 'date:unknown'}".strip()
+            f"- {e.title} | {e.url} | {e.published_at or '日期未知'}".strip()
             for e in evidence[:20]
         )
 
@@ -398,22 +335,22 @@ def worker_node(payload: dict) -> dict:
             SystemMessage(content=WORKER_SYSTEM),
             HumanMessage(
                 content=(
-                    f"Blog title: {plan.blog_title}\n"
-                    f"Audience: {plan.audience}\n"
-                    f"Tone: {plan.tone}\n"
-                    f"Blog kind: {plan.blog_kind}\n"
-                    f"Constraints: {plan.constraints}\n"
-                    f"Topic: {topic}\n"
-                    f"Mode: {mode}\n\n"
-                    f"Section title: {task.title}\n"
-                    f"Goal: {task.goal}\n"
-                    f"Target words: {task.target_words}\n"
-                    f"Tags: {task.tags}\n"
+                    f"文章标题：{plan.blog_title}\n"
+                    f"目标读者：{plan.audience}\n"
+                    f"写作风格：{plan.tone}\n"
+                    f"文章类型：{plan.blog_kind}\n"
+                    f"写作约束：{plan.constraints}\n"
+                    f"主题：{topic}\n"
+                    f"写作模式：{mode}\n\n"
+                    f"章节标题：{task.title}\n"
+                    f"本节目标：{task.goal}\n"
+                    f"目标字数（中文字符，不含代码）：{task.target_words}\n"
+                    f"标签：{task.tags}\n"
                     f"requires_research: {task.requires_research}\n"
                     f"requires_citations: {task.requires_citations}\n"
                     f"requires_code: {task.requires_code}\n"
-                    f"Bullets:{bullets_text}\n\n"
-                    f"Evidence (ONLY use these URLs when citing):\n{evidence_text}\n"
+                    f"内容要点：{bullets_text}\n\n"
+                    f"参考资料（引用仅可使用以下 URL）：\n{evidence_text}\n"
                 )
             ),
         ]
@@ -440,21 +377,19 @@ def merge_content(state: State) -> dict:
     return {"merged_md": merged_md}
 
 
-DECIDE_IMAGES_SYSTEM = """You are an expert technical editor.
-Decide if images/diagrams are needed for THIS blog.
-
-Rules:
-- Max 3 images total.
-- Each image must materially improve understanding (diagram/flow/table-like visual).
-- Insert placeholders exactly: [[IMAGE_1]], [[IMAGE_2]], [[IMAGE_3]].
-- If no images needed: md_with_placeholders must equal input and images=[].
-- Avoid decorative images; prefer technical diagrams with short labels.
-Return strictly GlobalImagePlan.
-"""
+DECIDE_IMAGES_SYSTEM = """你是中文技术博客编辑，判断文章是否需要辅助理解的配图。
+- 最多 3 张，只生成有解释价值的流程图、原理图等，避免装饰性图片。
+- 保持全文为简体中文，保留原文标题、正文与引用，不翻译成英文，也不删改内容。
+- 在适当位置插入准确的占位符 [[IMAGE_1]]、[[IMAGE_2]]、[[IMAGE_3]]。
+- 不需要配图时，md_with_placeholders 必须与原文一致，images=[]。
+- alt 和 caption 使用简体中文。filename 使用简短的英文 JPEG 文件名，以 .jpg 结尾。
+- prompt 使用英文，最多 2048 字符，以便 FLUX.1 schnell 理解画面结构；优先无文字示意图，用中文图注解释。
+- 不依赖模型在图内绘制中文文字；使用默认图片尺寸。
+严格返回 GlobalImagePlan，Schema 字段名保持英文。"""
 
 def decide_images(state: State) -> dict:
     
-    planner = llm.with_structured_output(GlobalImagePlan)
+    planner = structured_output(llm, GlobalImagePlan)
     merged_md = state["merged_md"]
     plan = state["plan"]
     assert plan is not None
@@ -464,9 +399,9 @@ def decide_images(state: State) -> dict:
             SystemMessage(content=DECIDE_IMAGES_SYSTEM),
             HumanMessage(
                 content=(
-                    f"Blog kind: {plan.blog_kind}\n"
-                    f"Topic: {state['topic']}\n\n"
-                    "Insert placeholders + propose image prompts.\n\n"
+                    f"文章类型：{plan.blog_kind}\n"
+                    f"主题：{state['topic']}\n\n"
+                    "插入配图占位符，并制定配图提示词。\n\n"
                     f"{merged_md}"
                 )
             ),
@@ -479,54 +414,6 @@ def decide_images(state: State) -> dict:
     }
 
 
-def _gemini_generate_image_bytes(prompt: str) -> bytes:
-    """
-    Returns raw image bytes generated by Gemini.
-    Requires: pip install google-genai
-    Env var: GOOGLE_API_KEY
-    """
-    from google import genai
-    from google.genai import types
-
-    api_key = os.environ.get("GOOGLE_API_KEY")
-    if not api_key:
-        raise RuntimeError("GOOGLE_API_KEY is not set.")
-
-    client = genai.Client(api_key=api_key)
-
-    resp = client.models.generate_content(
-        model="gemini-3.5-flash-lite-image",
-        contents=prompt,
-        config=types.GenerateContentConfig(
-            response_modalities=["IMAGE"],
-            safety_settings=[
-                types.SafetySetting(
-                    category="HARM_CATEGORY_DANGEROUS_CONTENT",
-                    threshold="BLOCK_ONLY_HIGH",
-                )
-            ],
-        ),
-    )
-
-    # Depending on SDK version, parts may hang off resp.candidates[0].content.parts
-    parts = getattr(resp, "parts", None)
-    if not parts and getattr(resp, "candidates", None):
-        try:
-            parts = resp.candidates[0].content.parts
-        except Exception:
-            parts = None
-
-    if not parts:
-        raise RuntimeError("No image content returned (safety/quota/SDK change).")
-
-    for part in parts:
-        inline = getattr(part, "inline_data", None)
-        if inline and getattr(inline, "data", None):
-            return inline.data
-
-    raise RuntimeError("No inline image bytes found in response.")
-
-
 def generate_and_place_images(state: State) -> dict:
 
     plan = state["plan"]
@@ -534,33 +421,35 @@ def generate_and_place_images(state: State) -> dict:
 
     md = state.get("md_with_placeholders") or state["merged_md"]
     image_specs = state.get("image_specs", []) or []
+    outputs_dir = BASE_DIR / "outputs"
+    outputs_dir.mkdir(exist_ok=True)
 
     # If no images requested, just write merged markdown
     if not image_specs:
         filename = f"{plan.blog_title}.md"
-        Path(filename).write_text(md, encoding="utf-8")
+        (outputs_dir / filename).write_text(md, encoding="utf-8")
         return {"final": md}
 
-    images_dir = Path("images")
+    images_dir = BASE_DIR / "images"
     images_dir.mkdir(exist_ok=True)
 
     for spec in image_specs:
         placeholder = spec["placeholder"]
-        filename = spec["filename"]
+        filename = Path(spec["filename"]).with_suffix(".jpg").name
         out_path = images_dir / filename
 
         # generate only if needed
         if not out_path.exists():
             try:
-                img_bytes = _gemini_generate_image_bytes(spec["prompt"])
+                img_bytes = generate_image_bytes(spec["prompt"])
                 out_path.write_bytes(img_bytes)
             except Exception as e:
                 # graceful fallback: keep doc usable
                 prompt_block = (
-                    f"> **[IMAGE GENERATION FAILED]** {spec.get('caption','')}\n>\n"
-                    f"> **Alt:** {spec.get('alt','')}\n>\n"
-                    f"> **Prompt:** {spec.get('prompt','')}\n>\n"
-                    f"> **Error:** {e}\n"
+                    f"> **[配图生成失败]** {spec.get('caption','')}\n>\n"
+                    f"> **图片说明：** {spec.get('alt','')}\n>\n"
+                    f"> **配图提示词：** {spec.get('prompt','')}\n>\n"
+                    f"> **错误信息：** {e}\n"
                 )
                 md = md.replace(placeholder, prompt_block)
                 continue
@@ -569,7 +458,7 @@ def generate_and_place_images(state: State) -> dict:
         md = md.replace(placeholder, img_md)
 
     filename = f"{plan.blog_title}.md"
-    Path(filename).write_text(md, encoding="utf-8")
+    (outputs_dir / filename).write_text(md, encoding="utf-8")
     return {"final": md}
 
 

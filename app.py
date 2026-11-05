@@ -53,8 +53,8 @@ logger = logging.getLogger("langgraph-fastapi")
 # FastAPI application
 # ---------------------------------------------------------
 app = FastAPI(
-    title="LangGraph Blog Agent",
-    description="FastAPI frontend for the existing LangGraph workflow.",
+    title="AgentWriter 中文博客助手",
+    description="基于 Cloudflare 与 LangGraph 的中文技术博客写作工作台。",
     version="1.0.0",
 )
 
@@ -90,9 +90,9 @@ templates = Jinja2Templates(
 class AgentRunRequest(BaseModel):
     topic: str = Field(
         ...,
-        min_length=3,
+        min_length=2,
         max_length=1000,
-        description="The technical blog topic.",
+        description="要撰写的中文技术博客主题。",
     )
 
 
@@ -298,11 +298,10 @@ def stream_workflow(
         {
             "type": "stage",
             "id": "router",
-            "label": "Analyze the request",
+            "label": "分析写作需求",
             "status": "running",
             "detail": (
-                "Determining whether the topic requires "
-                "current web research."
+                "正在判断主题是否需要联网检索最新资料。"
             ),
         }
     )
@@ -342,6 +341,12 @@ def stream_workflow(
                         )
                     )
 
+                    mode_label = {
+                        "closed_book": "基础知识",
+                        "hybrid": "资料辅助",
+                        "open_book": "时效资讯",
+                    }.get(mode, "自动")
+
                     needs_research = bool(
                         node_update.get(
                             "needs_research",
@@ -367,10 +372,10 @@ def stream_workflow(
                         {
                             "type": "stage",
                             "id": "router",
-                            "label": "Analyze the request",
+                            "label": "分析写作需求",
                             "status": "completed",
                             "detail": (
-                                f"Selected {mode.replace('_', ' ')} mode."
+                                f"已选择{mode_label}模式。"
                             ),
                         }
                     )
@@ -380,11 +385,10 @@ def stream_workflow(
                             {
                                 "type": "stage",
                                 "id": "research",
-                                "label": "Research authoritative sources",
+                                "label": "检索权威资料",
                                 "status": "running",
                                 "detail": (
-                                    "Searching the web and preparing "
-                                    "a deduplicated evidence pack."
+                                    "正在检索网络资料，并整理去重后的参考来源。"
                                 ),
                             }
                         )
@@ -394,11 +398,10 @@ def stream_workflow(
                             {
                                 "type": "stage",
                                 "id": "orchestrator",
-                                "label": "Create the article plan",
+                                "label": "制定文章大纲",
                                 "status": "running",
                                 "detail": (
-                                    "Creating the article structure, "
-                                    "goals and writing tasks."
+                                    "正在规划文章结构、章节目标和写作任务。"
                                 ),
                             }
                         )
@@ -427,11 +430,10 @@ def stream_workflow(
                         {
                             "type": "stage",
                             "id": "research",
-                            "label": "Research authoritative sources",
+                            "label": "检索权威资料",
                             "status": "completed",
                             "detail": (
-                                f"Prepared {len(evidence)} "
-                                "deduplicated sources."
+                                f"已整理 {len(evidence)} 条去重后的参考来源。"
                             ),
                         }
                     )
@@ -440,11 +442,10 @@ def stream_workflow(
                         {
                             "type": "stage",
                             "id": "orchestrator",
-                            "label": "Create the article plan",
+                            "label": "制定文章大纲",
                             "status": "running",
                             "detail": (
-                                "Creating sections, goals, bullets "
-                                "and target word counts."
+                                "正在制定章节、写作目标、内容要点和目标字数。"
                             ),
                         }
                     )
@@ -474,11 +475,10 @@ def stream_workflow(
                         {
                             "type": "stage",
                             "id": "orchestrator",
-                            "label": "Create the article plan",
+                            "label": "制定文章大纲",
                             "status": "completed",
                             "detail": (
-                                f"Created {len(task_map)} "
-                                "article sections."
+                                f"已规划 {len(task_map)} 个文章章节。"
                             ),
                         }
                     )
@@ -487,11 +487,10 @@ def stream_workflow(
                         {
                             "type": "stage",
                             "id": "workers",
-                            "label": "Write the planned sections",
+                            "label": "撰写文章章节",
                             "status": "running",
                             "detail": (
-                                "Section workers are writing "
-                                "the article in parallel."
+                                "正在并行撰写各个章节。"
                             ),
                         }
                     )
@@ -538,7 +537,7 @@ def stream_workflow(
 
                         title = task_information.get(
                             "title",
-                            f"Section {task_id}",
+                            f"第 {task_id} 节",
                         )
 
                         yield create_sse_event(
@@ -565,11 +564,10 @@ def stream_workflow(
                             {
                                 "type": "stage",
                                 "id": "workers",
-                                "label": "Write the planned sections",
+                                "label": "撰写文章章节",
                                 "status": "completed",
                                 "detail": (
-                                    f"Completed all "
-                                    f"{len(task_map)} sections."
+                                    f"全部 {len(task_map)} 个章节已完成。"
                                 ),
                             }
                         )
@@ -578,11 +576,10 @@ def stream_workflow(
                             {
                                 "type": "stage",
                                 "id": "reducer",
-                                "label": "Assemble the final article",
+                                "label": "整合最终文章",
                                 "status": "running",
                                 "detail": (
-                                    "Merging the sections and "
-                                    "planning useful visuals."
+                                    "正在合并章节并规划博客配图。"
                                 ),
                             }
                         )
@@ -598,11 +595,10 @@ def stream_workflow(
                             {
                                 "type": "stage",
                                 "id": "reducer",
-                                "label": "Assemble the final article",
+                                "label": "整合最终文章",
                                 "status": "running",
                                 "detail": (
-                                    "Merging the sections and "
-                                    "planning useful visuals."
+                                    "正在合并章节并规划博客配图。"
                                 ),
                             }
                         )
@@ -613,7 +609,7 @@ def stream_workflow(
                         {
                             "type": "substage",
                             "id": "merge_content",
-                            "label": "Merged all written sections",
+                            "label": "已合并全部章节",
                             "status": "completed",
                             "namespace": list(namespace),
                         }
@@ -644,9 +640,7 @@ def stream_workflow(
                             "type": "substage",
                             "id": "decide_images",
                             "label": (
-                                f"Planned {len(image_specs)} "
-                                "technical visual"
-                                f"{'' if len(image_specs) == 1 else 's'}"
+                                f"已规划 {len(image_specs)} 张博客配图"
                             ),
                             "status": "completed",
                             "namespace": list(namespace),
@@ -670,7 +664,7 @@ def stream_workflow(
                         {
                             "type": "substage",
                             "id": "generate_images",
-                            "label": "Generated and placed visuals",
+                            "label": "已生成并插入配图",
                             "status": "completed",
                             "namespace": list(namespace),
                         }
@@ -712,7 +706,7 @@ def stream_workflow(
 
         if not final_markdown:
             raise RuntimeError(
-                "The workflow completed but did not return final Markdown."
+                "写作流程已结束，但未返回完整的 Markdown 文章。"
             )
 
         save_final_markdown(
@@ -724,9 +718,9 @@ def stream_workflow(
             {
                 "type": "stage",
                 "id": "reducer",
-                "label": "Assemble the final article",
+                "label": "整合最终文章",
                 "status": "completed",
-                "detail": "The final Markdown article is ready.",
+                "detail": "完整的中文 Markdown 文章已生成。",
             }
         )
 
@@ -765,7 +759,7 @@ def stream_workflow(
             {
                 "type": "error",
                 "run_id": run_id,
-                "message": str(error),
+                "message": f"生成文章失败：{error}",
             }
         )
 
@@ -773,6 +767,11 @@ def stream_workflow(
 # ---------------------------------------------------------
 # Page endpoint
 # ---------------------------------------------------------
+@app.get("/favicon.ico", include_in_schema=False)
+def favicon():
+    return FileResponse(STATIC_DIR / "favicon.svg", media_type="image/svg+xml")
+
+
 @app.get(
     "/",
     response_class=HTMLResponse,
@@ -782,7 +781,7 @@ def home(request: Request):
         request=request,
         name="index.html",
         context={
-            "page_title": "LangGraph Agent Writer",
+            "page_title": "AgentWriter 中文博客助手",
         },
     )
 
@@ -805,10 +804,10 @@ def health_check():
 def run_agent(request_data: AgentRunRequest):
     topic = request_data.topic.strip()
 
-    if len(topic) < 3:
+    if len(topic) < 2:
         raise HTTPException(
             status_code=422,
-            detail="Please provide a valid topic.",
+            detail="请输入至少 2 个字的博客主题。",
         )
 
     run_id = uuid.uuid4().hex
@@ -843,7 +842,7 @@ def download_markdown(run_id: str):
     if safe_run_id != run_id:
         raise HTTPException(
             status_code=400,
-            detail="Invalid run ID.",
+            detail="无效的任务编号。",
         )
 
     output_file = (
@@ -855,7 +854,7 @@ def download_markdown(run_id: str):
     if not output_file.is_file():
         raise HTTPException(
             status_code=404,
-            detail="Generated Markdown file was not found.",
+            detail="未找到生成的 Markdown 文章。",
         )
 
     return FileResponse(

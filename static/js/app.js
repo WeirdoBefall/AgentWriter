@@ -95,15 +95,14 @@ function resetInterface() {
     planMeta.innerHTML = "";
     planMeta.hidden = true;
 
-    taskCount.textContent = "0 tasks";
+    taskCount.textContent = "0 个章节";
 
     articlePreview.innerHTML = `
         <div class="empty-state">
             <div class="empty-icon">✎</div>
-            <h3>Your article will appear here</h3>
+            <h3>你的文章将在这里呈现</h3>
             <p>
-                The final result appears after every
-                section is completed.
+                所有章节完成后，即可预览、复制或下载完整的中文文章。
             </p>
         </div>
     `;
@@ -124,7 +123,7 @@ function resetInterface() {
         "true",
     );
 
-    runBadge.textContent = "Ready";
+    runBadge.textContent = "准备就绪";
     runBadge.className = "run-badge";
 
     updateProgress(0);
@@ -138,7 +137,7 @@ function setRunningState(isRunning) {
     cancelButton.hidden = !isRunning;
 
     if (isRunning) {
-        runBadge.textContent = "Running";
+        runBadge.textContent = "正在生成";
         runBadge.className = "run-badge running";
     }
 }
@@ -232,7 +231,7 @@ function addSubstage(event) {
             </div>
 
             <div class="timeline-detail">
-                Completed
+                已完成
             </div>
         </div>
     `;
@@ -243,9 +242,9 @@ function addSubstage(event) {
 
 function showRouting(event) {
     const modeLabels = {
-        closed_book: "Evergreen topic",
-        hybrid: "Research-assisted topic",
-        open_book: "Current information topic",
+        closed_book: "基础知识主题",
+        hybrid: "资料辅助主题",
+        open_book: "时效资讯主题",
     };
 
     const detail =
@@ -260,11 +259,11 @@ function showRouting(event) {
         );
 
         detailElement.textContent =
-            `${detail}. Research: ${
+            `${detail}，${
                 event.needs_research
-                    ? "required"
-                    : "not required"
-            }.`;
+                    ? "需要联网检索"
+                    : "无需联网检索"
+            }。`;
     }
 
     if (
@@ -331,6 +330,15 @@ function showResearch(event) {
 }
 
 
+const blogKindLabels = {
+    explainer: "原理讲解",
+    tutorial: "实战教程",
+    news_roundup: "资讯汇总",
+    comparison: "对比分析",
+    system_design: "系统设计",
+};
+
+
 function showPlan(plan) {
     planEmpty.hidden = true;
     planList.innerHTML = "";
@@ -341,34 +349,31 @@ function showPlan(plan) {
     completedTasks = 0;
 
     taskCount.textContent =
-        `${tasks.length} ${
-            tasks.length === 1 ? "task" : "tasks"
-        }`;
+        `${tasks.length} 个章节`;
 
     planMeta.hidden = false;
 
     planMeta.innerHTML = `
         <div>
-            <span>Audience</span>
+            <span>目标读者</span>
             <strong>
-                ${escapeHtml(plan.audience || "Developers")}
+                ${escapeHtml(plan.audience || "开发者")}
             </strong>
         </div>
 
         <div>
-            <span>Format</span>
+            <span>文章类型</span>
             <strong>
                 ${escapeHtml(
-                    (plan.blog_kind || "explainer")
-                        .replaceAll("_", " "),
+                    blogKindLabels[plan.blog_kind] || "原理讲解",
                 )}
             </strong>
         </div>
 
         <div>
-            <span>Tone</span>
+            <span>写作风格</span>
             <strong>
-                ${escapeHtml(plan.tone || "Technical")}
+                ${escapeHtml(plan.tone || "严谨易懂")}
             </strong>
         </div>
     `;
@@ -382,15 +387,15 @@ function showPlan(plan) {
         const tags = [];
 
         if (task.requires_research) {
-            tags.push("Research");
+            tags.push("资料检索");
         }
 
         if (task.requires_citations) {
-            tags.push("Citations");
+            tags.push("引用来源");
         }
 
         if (task.requires_code) {
-            tags.push("Code");
+            tags.push("代码示例");
         }
 
         item.innerHTML = `
@@ -405,7 +410,7 @@ function showPlan(plan) {
                     </h3>
 
                     <span class="plan-status">
-                        Waiting
+                        等待撰写
                     </span>
                 </div>
 
@@ -416,7 +421,7 @@ function showPlan(plan) {
                 <div class="plan-tags">
                     <span>
                         ${escapeHtml(task.target_words)}
-                        words
+                        字
                     </span>
 
                     ${tags.map(
@@ -451,7 +456,7 @@ function completeSection(event) {
             ".plan-status",
         );
 
-        status.textContent = "Completed";
+        status.textContent = "已完成";
 
         const progressBar = taskElement.querySelector(
             ".task-progress span",
@@ -482,7 +487,7 @@ function completeSection(event) {
         );
 
         detail.textContent =
-            `${completedTasks} of ${totalTasks} sections completed.`;
+            `已完成 ${completedTasks} / ${totalTasks} 个章节。`;
     }
 }
 
@@ -507,7 +512,7 @@ function displayFinalResult(event) {
         "false",
     );
 
-    runBadge.textContent = "Completed";
+    runBadge.textContent = "已完成";
     runBadge.className = "run-badge completed";
 
     updateProgress(100);
@@ -522,7 +527,7 @@ function displayFinalResult(event) {
 
 
 function displayError(message) {
-    runBadge.textContent = "Failed";
+    runBadge.textContent = "生成失败";
     runBadge.className = "run-badge failed";
 
     const errorItem = document.createElement("div");
@@ -537,7 +542,7 @@ function displayError(message) {
 
         <div class="timeline-content">
             <div class="timeline-title">
-                Agent execution failed
+                文章生成失败
             </div>
 
             <div class="timeline-detail">
@@ -548,14 +553,14 @@ function displayError(message) {
 
     timeline.appendChild(errorItem);
 
-    showToast("Agent execution failed");
+    showToast("文章生成失败");
 }
 
 
 function handleEvent(event) {
     switch (event.type) {
         case "run_started":
-            runBadge.textContent = "Running";
+            runBadge.textContent = "正在生成";
             break;
 
         case "stage":
@@ -584,9 +589,7 @@ function handleEvent(event) {
 
         case "images_planned":
             showToast(
-                `${event.count} visual${
-                    event.count === 1 ? "" : "s"
-                } planned`,
+                `已规划 ${event.count} 张配图`,
             );
             break;
 
@@ -626,7 +629,7 @@ function parseSSEChunk(buffer) {
             handleEvent(event);
         } catch (error) {
             console.error(
-                "Could not parse stream event:",
+                "无法解析进度事件：",
                 rawData,
                 error,
             );
@@ -655,16 +658,19 @@ async function executeAgent(topic) {
     });
 
     if (!response.ok) {
-        const message = await response.text();
+        const payload = await response.json().catch(() => ({}));
+        const message = typeof payload.detail === "string"
+            ? payload.detail
+            : response.status === 422
+                ? "请输入 2～1000 字的博客主题。"
+                : "无法开始写作，请稍后重试。";
 
-        throw new Error(
-            message || "Could not start the agent.",
-        );
+        throw new Error(message);
     }
 
     if (!response.body) {
         throw new Error(
-            "Streaming is not supported by this browser.",
+            "当前浏览器不支持流式输出，请使用新版浏览器。",
         );
     }
 
@@ -708,9 +714,9 @@ runForm.addEventListener(
 
         const topic = topicInput.value.trim();
 
-        if (topic.length < 3) {
+        if (topic.length < 2) {
             showToast(
-                "Enter a more detailed topic.",
+                "请输入至少 2 个字的博客主题。",
             );
             return;
         }
@@ -725,17 +731,17 @@ runForm.addEventListener(
             await executeAgent(topic);
         } catch (error) {
             if (error.name === "AbortError") {
-                runBadge.textContent = "Stopped";
+                runBadge.textContent = "已停止";
                 runBadge.className =
                     "run-badge stopped";
 
                 showToast(
-                    "Generation stopped.",
+                    "已停止生成。",
                 );
             } else {
                 displayError(
                     error.message
-                    || "Unexpected error.",
+                    || "生成时发生错误，请稍后重试。",
                 );
             }
         } finally {
@@ -823,7 +829,7 @@ copyButton.addEventListener(
         );
 
         showToast(
-            "Markdown copied.",
+            "已复制 Markdown。",
         );
     },
 );
@@ -850,14 +856,14 @@ async function checkHealth() {
         );
 
         if (!response.ok) {
-            throw new Error("Server unavailable");
+            throw new Error("服务暂不可用");
         }
 
         healthDot.classList.add("online");
-        healthText.textContent = "Server online";
+        healthText.textContent = "服务已连接";
     } catch {
         healthDot.classList.remove("online");
-        healthText.textContent = "Server offline";
+        healthText.textContent = "服务未连接";
     }
 }
 

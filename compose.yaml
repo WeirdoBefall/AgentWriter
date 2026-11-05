@@ -1,0 +1,26 @@
+name: agentwriter
+
+services:
+  agentwriter:
+    build:
+      context: .
+    image: agentwriter:latest
+    env_file:
+      - .env
+    ports:
+      - "${AGENTWRITER_PORT:-8000}:8000"
+    volumes:
+      - images:/app/images
+      - outputs:/app/outputs
+    restart: unless-stopped
+    init: true
+    stop_grace_period: 35s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  images:
+  outputs:
